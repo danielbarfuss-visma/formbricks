@@ -9,6 +9,7 @@ import { applyRateLimit } from "@/modules/core/rate-limit/helpers";
 import { FollowUpSendError } from "@/modules/survey/follow-ups/types/follow-up";
 import { sendFollowUpEmail } from "./email";
 import { sendFollowUpsForResponse } from "./follow-ups";
+import { createScheduledFollowUp } from "./scheduled-follow-ups";
 import { getSurveyFollowUpsPermission } from "./utils";
 
 // Mock all dependencies
@@ -28,6 +29,10 @@ vi.mock("./email", () => ({
   sendFollowUpEmail: vi.fn(),
 }));
 
+vi.mock("./scheduled-follow-ups", () => ({
+  createScheduledFollowUp: vi.fn(),
+}));
+
 vi.mock("./utils", () => ({
   getSurveyFollowUpsPermission: vi.fn(),
 }));
@@ -40,6 +45,7 @@ describe("Follow-ups", () => {
   const mockResponse = {
     id: "response1",
     surveyId: "survey1",
+    createdAt: new Date("2026-01-01T00:00:00Z"),
     data: {
       email: "test@example.com",
       question1: "answer1",
@@ -47,6 +53,7 @@ describe("Follow-ups", () => {
     endingId: "ending1",
   } as unknown as TResponse;
 
+  // Endings trigger fixture — matches the test case for ending-ID matching.
   const mockSurvey = {
     id: "survey1",
     environmentId: "env1",
@@ -62,7 +69,7 @@ describe("Follow-ups", () => {
           },
         },
         trigger: {
-          type: "response",
+          type: "endings",
           properties: {
             endingIds: ["ending1"],
           },
@@ -93,7 +100,11 @@ describe("Follow-ups", () => {
     vi.mocked(getOrganizationByEnvironmentId).mockResolvedValue(mockOrganization);
     vi.mocked(getSurveyFollowUpsPermission).mockResolvedValue(true);
     vi.mocked(sendFollowUpEmail).mockResolvedValue(undefined);
-    vi.mocked(applyRateLimit).mockResolvedValue(undefined);
+    vi.mocked(applyRateLimit).mockResolvedValue({ allowed: true });
+    vi.mocked(createScheduledFollowUp).mockResolvedValue({
+      id: "scheduled1",
+      sendAt: new Date("2026-01-08T00:00:00Z"),
+    });
   });
 
   afterEach(() => {
@@ -368,6 +379,149 @@ describe("Follow-ups", () => {
       if (result.ok) {
         expect(result.data).toEqual([]);
         expect(sendFollowUpEmail).not.toHaveBeenCalled();
+      }
+    });
+
+    // ----------------------------------------------------------------
+    // Scheduled follow-up coverage
+    // ----------------------------------------------------------------
+
+    test("should queue a scheduled follow-up and NOT send immediately", async () => {
+      const scheduledSurvey = {
+        ...mockSurvey,
+        followUps: [
+          {
+            id: "scheduledFollowup1",
+            action: {
+              type: "send-email",
+              properties: {
+                to: "test@example.com",
+                from: "noreply@example.com",
+                replyTo: ["noreply@example.com"],
+                subject: "Check in",
+                body: "Body",
+                attachResponseData: false,
+              },
+            },
+            trigger: {
+              type: "scheduled",
+              properties: { delayDays: 7 },
+            },
+          },
+        ],
+      } as unknown as TSurvey;
+
+      vi.mocked(getSurvey).mockResolvedValue(scheduledSurvey);
+
+      const result = await sendFollowUpsForResponse("response1");
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0]).toEqual({
+          followUpId: "scheduledFollowup1",
+          status: "success",
+        });
+      }
+      expect(createScheduledFollowUp).toHaveBeenCalledTimes(1);
+      expect(createScheduledFollowUp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          followUpId: "scheduledFollowup1",
+          responseId: "response1",
+          surveyId: "survey1",
+          environmentId: "env1",
+          delayDays: 7,
+          responseCreatedAt: mockResponse.createdAt,
+        })
+      );
+      // The synchronous send path must NOT be used for scheduled follow-ups.
+      expect(sendFollowUpEmail).not.toHaveBeenCalled();
+    });
+
+    test("should NOT engage the endings filter for a scheduled follow-up (regression: trigger.properties truthiness)", async () => {
+      // Response has no endingId → the buggy condition `if (trigger.properties)`
+      // would skip a scheduled follow-up because its properties are non-null.
+      // The fixed condition must check `trigger.type === "endings"` explicitly.
+      const responseWithoutEnding = {
+        ...mockResponse,
+        endingId: undefined,
+      } as unknown as TResponse;
+
+      const scheduledSurvey = {
+        ...mockSurvey,
+        followUps: [
+          {
+            id: "scheduledFollowup1",
+            action: {
+              type: "send-email",
+              properties: {
+                to: "test@example.com",
+                from: "noreply@example.com",
+                replyTo: ["noreply@example.com"],
+                subject: "Check in",
+                body: "Body",
+                attachResponseData: false,
+              },
+            },
+            trigger: {
+              type: "scheduled",
+              properties: { delayDays: 30 },
+            },
+          },
+        ],
+      } as unknown as TSurvey;
+
+      vi.mocked(getResponse).mockResolvedValue(responseWithoutEnding);
+      vi.mocked(getSurvey).mockResolvedValue(scheduledSurvey);
+
+      const result = await sendFollowUpsForResponse("response1");
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].status).toBe("success"); // queued, not skipped
+      }
+      expect(createScheduledFollowUp).toHaveBeenCalledTimes(1);
+    });
+
+    test("should record an error if scheduling throws", async () => {
+      const scheduledSurvey = {
+        ...mockSurvey,
+        followUps: [
+          {
+            id: "scheduledFollowup1",
+            action: {
+              type: "send-email",
+              properties: {
+                to: "test@example.com",
+                from: "noreply@example.com",
+                replyTo: ["noreply@example.com"],
+                subject: "Check in",
+                body: "Body",
+                attachResponseData: false,
+              },
+            },
+            trigger: {
+              type: "scheduled",
+              properties: { delayDays: 7 },
+            },
+          },
+        ],
+      } as unknown as TSurvey;
+
+      vi.mocked(getSurvey).mockResolvedValue(scheduledSurvey);
+      vi.mocked(createScheduledFollowUp).mockRejectedValue(new Error("DB write failed"));
+
+      const result = await sendFollowUpsForResponse("response1");
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0]).toEqual({
+          followUpId: "scheduledFollowup1",
+          status: "error",
+          error: "Failed to schedule follow-up: DB write failed",
+        });
       }
     });
   });

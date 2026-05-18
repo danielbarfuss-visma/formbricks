@@ -314,14 +314,17 @@ export const EditEndingCard = ({
           setLocalSurvey((prevSurvey) => {
             const updatedEndings = prevSurvey.endings.filter((_, index) => index !== endingCardIndex);
             const surveyFollowUps = prevSurvey.followUps.map((f) => {
-              if (f.trigger.properties?.endingIds?.includes(endingCard.id)) {
+              // Only `endings`-type triggers reference endingIds; the
+              // discriminated union makes this check load-bearing for type
+              // narrowing (`response` has null properties, `scheduled` has
+              // `delayDays` instead).
+              if (f.trigger.type === "endings" && f.trigger.properties.endingIds.includes(endingCard.id)) {
                 return {
                   ...f,
                   trigger: {
-                    ...f.trigger,
+                    type: "endings" as const,
                     properties: {
-                      ...f.trigger.properties,
-                      endingIds: f.trigger.properties.endingIds.filter((id) => id !== endingCard.id),
+                      endingIds: f.trigger.properties.endingIds.filter((id: string) => id !== endingCard.id),
                     },
                   },
                 };

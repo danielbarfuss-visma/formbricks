@@ -18,6 +18,7 @@ import toast from "react-hot-toast";
 import { useTranslation } from "react-i18next";
 import { TSurveyFollowUpAction, TSurveyFollowUpTrigger } from "@formbricks/database/types/survey-follow-up";
 import { TSurveyElementTypeEnum } from "@formbricks/types/surveys/elements";
+import { SCHEDULED_FOLLOW_UP_DEFAULT_DAYS } from "@formbricks/types/surveys/follow-up";
 import { TSurvey } from "@formbricks/types/surveys/types";
 import { getTextContent } from "@formbricks/types/surveys/validation";
 import { TUserLocale } from "@formbricks/types/user";
@@ -183,6 +184,7 @@ export const FollowUpModal = ({
       followUpName: defaultValues?.followUpName ?? "",
       triggerType: defaultValues?.triggerType ?? "response",
       endingIds: defaultValues?.endingIds || null,
+      delayDays: defaultValues?.delayDays ?? null,
       emailTo: defaultValues?.emailTo ?? emailSendToOptions[0]?.id,
       replyTo: defaultValues?.replyTo ?? [userEmail],
       subject: defaultValues?.subject ?? t("environments.surveys.edit.follow_ups_modal_action_subject"),
@@ -225,16 +227,33 @@ export const FollowUpModal = ({
       }
     }
 
-    const getProperties = (): TSurveyFollowUpTrigger["properties"] => {
+    if (data.triggerType === "scheduled") {
+      if (data.delayDays === null || data.delayDays === undefined) {
+        form.setError("delayDays", {
+          type: "manual",
+          message: t("environments.surveys.edit.follow_ups_modal_trigger_delay_days_required"),
+        });
+        return;
+      }
+    }
+
+    // Build the trigger payload to match the discriminated union shape
+    // expected by the canonical TSurveyFollowUpTrigger schema.
+    const buildTrigger = (): TSurveyFollowUpTrigger => {
       if (data.triggerType === "response") {
-        return null;
+        return { type: "response", properties: null };
       }
-
-      if (data.endingIds && data.endingIds.length > 0) {
-        return { endingIds: data.endingIds };
+      if (data.triggerType === "scheduled") {
+        return {
+          type: "scheduled",
+          properties: { delayDays: data.delayDays as number },
+        };
       }
-
-      return null;
+      // endings
+      return {
+        type: "endings",
+        properties: { endingIds: data.endingIds ?? [] },
+      };
     };
 
     if (mode === "edit") {
@@ -260,10 +279,7 @@ export const FollowUpModal = ({
         updatedAt: new Date(),
         surveyId: localSurvey.id,
         name: data.followUpName,
-        trigger: {
-          type: data.triggerType,
-          properties: getProperties(),
-        },
+        trigger: buildTrigger(),
         action: {
           type: "send-email" as TSurveyFollowUpAction["type"],
           properties: {
@@ -309,10 +325,7 @@ export const FollowUpModal = ({
       updatedAt: new Date(),
       surveyId: localSurvey.id,
       name: data.followUpName,
-      trigger: {
-        type: data.triggerType,
-        properties: getProperties(),
-      },
+      trigger: buildTrigger(),
       action: {
         type: "send-email" as TSurveyFollowUpAction["type"],
         properties: {
@@ -374,6 +387,7 @@ export const FollowUpModal = ({
         followUpName: defaultValues?.followUpName ?? "",
         triggerType: defaultValues?.triggerType ?? "response",
         endingIds: defaultValues?.endingIds || null,
+        delayDays: defaultValues?.delayDays ?? null,
         emailTo: defaultValues?.emailTo ?? emailSendToOptions[0]?.id,
         replyTo: defaultValues?.replyTo ?? [userEmail],
         subject: defaultValues?.subject ?? "Thanks for your answers!",
@@ -508,7 +522,27 @@ export const FollowUpModal = ({
                               <div className="max-w-80">
                                 <Select
                                   defaultValue={field.value}
-                                  onValueChange={(value) => field.onChange(value)}>
+                                  value={field.value}
+                                  onValueChange={(value) => {
+                                    field.onChange(value);
+                                    // When switching to scheduled, default the delay
+                                    // to the product-decided default (7 days) if
+                                    // none has been set yet. When switching away,
+                                    // clear it so stale values don't leak.
+                                    if (value === "scheduled") {
+                                      if (
+                                        form.getValues("delayDays") === null ||
+                                        form.getValues("delayDays") === undefined
+                                      ) {
+                                        form.setValue("delayDays", SCHEDULED_FOLLOW_UP_DEFAULT_DAYS, {
+                                          shouldValidate: true,
+                                        });
+                                      }
+                                    } else {
+                                      form.setValue("delayDays", null);
+                                      form.clearErrors("delayDays");
+                                    }
+                                  }}>
                                   <SelectTrigger>
                                     <SelectValue />
                                   </SelectTrigger>
@@ -516,6 +550,9 @@ export const FollowUpModal = ({
                                   <SelectContent>
                                     <SelectItem value="response">
                                       {t("environments.surveys.edit.follow_ups_modal_trigger_type_response")}
+                                    </SelectItem>
+                                    <SelectItem value="scheduled">
+                                      {t("environments.surveys.edit.follow_ups_modal_trigger_type_scheduled")}
                                     </SelectItem>
                                     {localSurvey.endings.length > 0 ? (
                                       <SelectItem value="endings">
@@ -540,6 +577,60 @@ export const FollowUpModal = ({
                         );
                       }}
                     />
+
+                    {triggerType === "scheduled" ? (
+                      <FormField
+                        control={form.control}
+                        name="delayDays"
+                        render={({ field }) => {
+                          const currentValue = field.value ?? SCHEDULED_FOLLOW_UP_DEFAULT_DAYS;
+                          return (
+                            <FormItem>
+                              <div className="flex flex-col space-y-2">
+                                <FormLabel htmlFor="delayDays" className="font-medium">
+                                  {t("environments.surveys.edit.follow_ups_modal_trigger_delay_days_label")}
+                                </FormLabel>
+                                <FormDescription className="text-sm text-slate-500">
+                                  {t(
+                                    "environments.surveys.edit.follow_ups_modal_trigger_delay_days_description",
+                                    { days: currentValue }
+                                  )}
+                                </FormDescription>
+                                <div className="flex items-center space-x-2">
+                                  <FormControl>
+                                    <Input
+                                      id="delayDays"
+                                      type="number"
+                                      min={1}
+                                      max={365}
+                                      step={1}
+                                      className="w-24"
+                                      value={field.value ?? ""}
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        if (raw === "") {
+                                          field.onChange(null);
+                                          return;
+                                        }
+                                        const parsed = Number.parseInt(raw, 10);
+                                        field.onChange(Number.isNaN(parsed) ? null : parsed);
+                                      }}
+                                      isInvalid={!!formErrors.delayDays}
+                                    />
+                                  </FormControl>
+                                  <span className="text-sm text-slate-600">
+                                    {t("environments.surveys.edit.follow_ups_modal_trigger_delay_days_unit")}
+                                  </span>
+                                </div>
+                                {formErrors.delayDays ? (
+                                  <span className="text-sm text-red-500">{formErrors.delayDays.message}</span>
+                                ) : null}
+                              </div>
+                            </FormItem>
+                          );
+                        }}
+                      />
+                    ) : null}
 
                     {localSurvey.endings.length > 0 && triggerType === "endings" ? (
                       <FormField

@@ -355,9 +355,7 @@ describe("Survey Editor Library Tests", () => {
             surveyId: "survey123",
             trigger: {
               type: "response",
-              properties: {
-                endingIds: ["ending1"],
-              },
+              properties: null,
             },
             action: {
               type: "send-email",
@@ -380,9 +378,7 @@ describe("Survey Editor Library Tests", () => {
             surveyId: "survey123",
             trigger: {
               type: "response",
-              properties: {
-                endingIds: ["ending1"],
-              },
+              properties: null,
             },
             action: {
               type: "send-email",
@@ -405,9 +401,7 @@ describe("Survey Editor Library Tests", () => {
             surveyId: "survey123",
             trigger: {
               type: "response",
-              properties: {
-                endingIds: ["ending1"],
-              },
+              properties: null,
             },
             action: {
               type: "send-email",
@@ -434,9 +428,7 @@ describe("Survey Editor Library Tests", () => {
             name: "Existing Follow Up",
             trigger: {
               type: "response",
-              properties: {
-                endingIds: ["ending1"],
-              },
+              properties: null,
             },
             action: {
               type: "send-email",

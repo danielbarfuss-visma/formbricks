@@ -103,8 +103,9 @@ export const FollowUpItem = ({
   ]);
 
   const isEndingInvalid = useMemo(() => {
-    return followUp.trigger.type === "endings" && !followUp.trigger.properties?.endingIds?.length;
-  }, [followUp.trigger.properties?.endingIds?.length, followUp.trigger.type]);
+    if (followUp.trigger.type !== "endings") return false;
+    return !followUp.trigger.properties.endingIds?.length;
+  }, [followUp.trigger]);
 
   const duplicateFollowUp = useCallback(() => {
     const newFollowUp = {
@@ -129,15 +130,25 @@ export const FollowUpItem = ({
           }}>
           <h3 className="text-slate-900">{followUp.name}</h3>
           <div className="flex space-x-2">
-            <Badge
-              size="normal"
-              type="gray"
-              text={
-                followUp.trigger.type === "response"
-                  ? t("environments.surveys.edit.follow_ups_item_response_tag")
-                  : t("environments.surveys.edit.follow_ups_item_ending_tag")
-              }
-            />
+            {followUp.trigger.type === "scheduled" && followUp.trigger.properties ? (
+              <Badge
+                size="normal"
+                type="warning"
+                text={t("environments.surveys.edit.follow_ups_item_scheduled_tag", {
+                  days: followUp.trigger.properties.delayDays,
+                })}
+              />
+            ) : (
+              <Badge
+                size="normal"
+                type="gray"
+                text={
+                  followUp.trigger.type === "response"
+                    ? t("environments.surveys.edit.follow_ups_item_response_tag")
+                    : t("environments.surveys.edit.follow_ups_item_ending_tag")
+                }
+              />
+            )}
 
             <Badge
               size="normal"
@@ -196,6 +207,8 @@ export const FollowUpItem = ({
           followUpName: followUp.name,
           triggerType: followUp.trigger.type,
           endingIds: followUp.trigger.type === "endings" ? followUp.trigger.properties?.endingIds : null,
+          delayDays:
+            followUp.trigger.type === "scheduled" ? (followUp.trigger.properties?.delayDays ?? null) : null,
           subject: followUp.action.properties.subject,
           body: followUp.action.properties.body,
           emailTo: followUp.action.properties.to,

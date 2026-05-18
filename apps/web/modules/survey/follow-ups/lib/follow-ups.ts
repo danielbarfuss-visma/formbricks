@@ -14,6 +14,7 @@ import { validateInputs } from "@/lib/utils/validate";
 import { applyRateLimit } from "@/modules/core/rate-limit/helpers";
 import { rateLimitConfigs } from "@/modules/core/rate-limit/rate-limit-configs";
 import { sendFollowUpEmail } from "@/modules/survey/follow-ups/lib/email";
+import { createScheduledFollowUp } from "@/modules/survey/follow-ups/lib/scheduled-follow-ups";
 import { getSurveyFollowUpsPermission } from "@/modules/survey/follow-ups/lib/utils";
 import { FollowUpResult, FollowUpSendError } from "@/modules/survey/follow-ups/types/follow-up";
 
@@ -213,8 +214,40 @@ export const sendFollowUpsForResponse = async (
     const followUpPromises = survey.followUps.map(async (followUp): Promise<FollowUpResult> => {
       const { trigger } = followUp;
 
-      // Check if we should skip this follow-up based on ending IDs
-      if (trigger.properties) {
+      // Scheduled follow-ups are deferred — queue a ScheduledFollowUp row and
+      // return success without sending. The cron processor will dispatch the
+      // email at sendAt.
+      if (trigger.type === "scheduled" && trigger.properties) {
+        try {
+          await createScheduledFollowUp({
+            followUpId: followUp.id,
+            responseId: response.id,
+            surveyId: survey.id,
+            environmentId: survey.environmentId,
+            responseCreatedAt: response.createdAt,
+            delayDays: trigger.properties.delayDays,
+          });
+          return {
+            followUpId: followUp.id,
+            status: "success",
+          };
+        } catch (error) {
+          return {
+            followUpId: followUp.id,
+            status: "error",
+            error:
+              error instanceof Error
+                ? `Failed to schedule follow-up: ${error.message}`
+                : "Failed to schedule follow-up",
+          };
+        }
+      }
+
+      // Check if we should skip this follow-up based on ending IDs.
+      // NOTE: This must check `trigger.type === "endings"` explicitly, not
+      // `trigger.properties` truthiness, because other trigger variants
+      // (e.g. "scheduled") also carry non-null properties.
+      if (trigger.type === "endings" && trigger.properties) {
         const { endingIds } = trigger.properties;
         const { endingId } = response;
 
